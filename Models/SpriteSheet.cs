@@ -135,4 +135,9 @@ public class SpriteSheet
                 ActiveAnimation.Flip, angle, rotationCenter);
         }
     }
+
+    public int GetTextureId()
+    {
+        return _textureId;
+    }
 }

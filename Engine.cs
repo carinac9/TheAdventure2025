@@ -21,6 +21,7 @@ public class Engine
     private PlayerObject? _player;
 
     private DateTimeOffset _lastUpdate = DateTimeOffset.Now;
+    private List<HealthPickup> _healthPickups = new();
 
     public Engine(GameRenderer renderer, Input input)
     {
@@ -36,19 +37,20 @@ public class Engine
 
         var levelContent = File.ReadAllText(Path.Combine("Assets", "terrain.tmj"));
         var level = JsonSerializer.Deserialize<Level>(levelContent);
+        var healthSprite = SpriteSheet.Load(_renderer, "HealthPickup.json", "Assets");
+        // Place health pickups far from player to avoid instant collection
+        _healthPickups.Add(new HealthPickup(healthSprite, (300, 200)));
+        _healthPickups.Add(new HealthPickup(healthSprite, (500, 300)));
+
         if (level == null)
-        {
             throw new Exception("Failed to load level");
-        }
 
         foreach (var tileSetRef in level.TileSets)
         {
             var tileSetContent = File.ReadAllText(Path.Combine("Assets", tileSetRef.Source));
             var tileSet = JsonSerializer.Deserialize<TileSet>(tileSetContent);
             if (tileSet == null)
-            {
                 throw new Exception("Failed to load tile set");
-            }
 
             foreach (var tile in tileSet.Tiles)
             {
@@ -60,14 +62,10 @@ public class Engine
         }
 
         if (level.Width == null || level.Height == null)
-        {
             throw new Exception("Invalid level dimensions");
-        }
 
         if (level.TileWidth == null || level.TileHeight == null)
-        {
             throw new Exception("Invalid tile dimensions");
-        }
 
         _renderer.SetWorldBounds(new Rectangle<int>(0, 0, level.Width.Value * level.TileWidth.Value,
             level.Height.Value * level.TileHeight.Value));
@@ -84,9 +82,7 @@ public class Engine
         _lastUpdate = currentTime;
 
         if (_player == null)
-        {
             return;
-        }
 
         double up = _input.IsUpPressed() ? 1.0 : 0.0;
         double down = _input.IsDownPressed() ? 1.0 : 0.0;
@@ -96,17 +92,12 @@ public class Engine
         bool addBomb = _input.IsKeyBPressed();
 
         _player.UpdatePosition(up, down, left, right, 48, 48, msSinceLastFrame);
-        if (isAttacking)
-        {
-            _player.Attack();
-        }
-        
+        if (isAttacking) _player.Attack();
+
         _scriptEngine.ExecuteAll(this);
 
         if (addBomb)
-        {
             AddBomb(_player.Position.X, _player.Position.Y, false);
-        }
     }
 
     public void RenderFrame()
@@ -139,10 +130,7 @@ public class Engine
         {
             _gameObjects.Remove(id, out var gameObject);
 
-            if (_player == null)
-            {
-                continue;
-            }
+            if (_player == null) continue;
 
             var tempGameObject = (TemporaryGameObject)gameObject!;
             var deltaX = Math.Abs(_player.Position.X - tempGameObject.Position.X);
@@ -153,55 +141,62 @@ public class Engine
             }
         }
 
-        _player?.Render(_renderer);
+        foreach (var pickup in _healthPickups)
+        {
+            pickup.Render(_renderer);
+        }
 
-        // Draw health bar above player
         if (_player != null)
         {
-            var barWidth = 48;
-            var barHeight = 6;
-            var healthPercent = (float)_player.CurrentHealth / _player.MaxHealth;
-            var playerPos = _player.Position;
-            var barX = playerPos.X - barWidth / 2;
-            var barY = playerPos.Y - 40; // above the player sprite
+            for (int i = _healthPickups.Count - 1; i >= 0; i--)
+            {
+                var pickup = _healthPickups[i];
+                var dx = Math.Abs(_player.Position.X - pickup.Position.X);
+                var dy = Math.Abs(_player.Position.Y - pickup.Position.Y);
+                if (dx < 32 && dy < 32 && _player.CurrentHealth < _player.MaxHealth)
+                {
+                    _player.Heal(pickup.HealAmount);
+                    _healthPickups.RemoveAt(i);
+                }
+            }
 
-            // Background (red)
-            _renderer.SetDrawColor(200, 40, 40, 255);
+            _player.Render(_renderer);
+
+            // Draw health bar at fixed screen position (top-left corner)
+            var barWidth = 120;
+            var barHeight = 16;
+            var healthPercent = (float)_player.CurrentHealth / _player.MaxHealth;
+            var barX = 16; // screen X
+            var barY = 16; // screen Y
+
+            _renderer.SetDrawColor(200, 40, 40, 255); // Red background
             _renderer.FillRect(barX, barY, barWidth, barHeight);
-            // Foreground (green)
-            _renderer.SetDrawColor(40, 200, 40, 255);
+            _renderer.SetDrawColor(40, 200, 40, 255); // Green foreground
             _renderer.FillRect(barX, barY, (int)(barWidth * healthPercent), barHeight);
         }
     }
 
     public void RenderTerrain()
     {
-        foreach (var currentLayer in _currentLevel.Layers)
+        foreach (var layer in _currentLevel.Layers)
         {
             for (int i = 0; i < _currentLevel.Width; ++i)
             {
                 for (int j = 0; j < _currentLevel.Height; ++j)
                 {
-                    int? dataIndex = j * currentLayer.Width + i;
-                    if (dataIndex == null)
-                    {
-                        continue;
-                    }
+                    int? dataIndex = j * layer.Width + i;
+                    if (dataIndex == null) continue;
 
-                    var currentTileId = currentLayer.Data[dataIndex.Value] - 1;
-                    if (currentTileId == null)
-                    {
-                        continue;
-                    }
+                    var currentTileId = layer.Data[dataIndex.Value] - 1;
+                    if (currentTileId == null) continue;
 
-                    var currentTile = _tileIdMap[currentTileId.Value];
+                    var tile = _tileIdMap[currentTileId.Value];
+                    var tw = tile.ImageWidth ?? 0;
+                    var th = tile.ImageHeight ?? 0;
 
-                    var tileWidth = currentTile.ImageWidth ?? 0;
-                    var tileHeight = currentTile.ImageHeight ?? 0;
-
-                    var sourceRect = new Rectangle<int>(0, 0, tileWidth, tileHeight);
-                    var destRect = new Rectangle<int>(i * tileWidth, j * tileHeight, tileWidth, tileHeight);
-                    _renderer.RenderTexture(currentTile.TextureId, sourceRect, destRect);
+                    _renderer.RenderTexture(tile.TextureId,
+                        new Rectangle<int>(0, 0, tw, th),
+                        new Rectangle<int>(i * tw, j * th, tw, th));
                 }
             }
         }
@@ -211,26 +206,21 @@ public class Engine
     {
         foreach (var gameObject in _gameObjects.Values)
         {
-            if (gameObject is RenderableGameObject renderableGameObject)
-            {
-                yield return renderableGameObject;
-            }
+            if (gameObject is RenderableGameObject renderable)
+                yield return renderable;
         }
     }
 
-    public (int X, int Y) GetPlayerPosition()
-    {
-        return _player!.Position;
-    }
+    public (int X, int Y) GetPlayerPosition() => _player!.Position;
 
     public void AddBomb(int X, int Y, bool translateCoordinates = true)
     {
         var worldCoords = translateCoordinates ? _renderer.ToWorldCoordinates(X, Y) : new Vector2D<int>(X, Y);
 
-        SpriteSheet spriteSheet = SpriteSheet.Load(_renderer, "BombExploding.json", "Assets");
+        var spriteSheet = SpriteSheet.Load(_renderer, "BombExploding.json", "Assets");
         spriteSheet.ActivateAnimation("Explode");
 
-        TemporaryGameObject bomb = new(spriteSheet, 2.1, (worldCoords.X, worldCoords.Y));
+        var bomb = new TemporaryGameObject(spriteSheet, 2.1, (worldCoords.X, worldCoords.Y));
         _gameObjects.Add(bomb.Id, bomb);
     }
 }
