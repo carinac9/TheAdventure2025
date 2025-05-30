@@ -4,6 +4,8 @@ using Silk.NET.Maths;
 using TheAdventure.Models;
 using TheAdventure.Models.Data;
 using TheAdventure.Scripting;
+using TheAdventure.Audio;
+
 
 namespace TheAdventure;
 
@@ -12,6 +14,8 @@ public class Engine
     private readonly GameRenderer _renderer;
     private readonly Input _input;
     private readonly ScriptEngine _scriptEngine = new();
+    private readonly SoundEffect _dashSound = new("Assets/dash.wav");
+
 
     private readonly Dictionary<int, GameObject> _gameObjects = new();
     private readonly Dictionary<string, TileSet> _loadedTileSets = new();
@@ -102,6 +106,7 @@ public class Engine
         if (dashPressed)
         {
             _player.TryStartDash();
+            _dashSound.Play();
         }
 
         // Use dash speed if dashing
